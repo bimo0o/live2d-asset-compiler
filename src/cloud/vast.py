@@ -35,6 +35,7 @@ Use the Docker image built from this GitHub repository:
 Upload `output/{package_dir.parent.name}.zip` to the Vast.ai instance, then run:
 
 ```bash
+python -m src.remote.worker --run-zip /workspace/{package_dir.parent.name}.zip --preflight
 python -m src.remote.worker --run-zip /workspace/{package_dir.parent.name}.zip
 ```
 
@@ -132,6 +133,7 @@ vastai create instance <offer_id> --image {config.vast.docker_image} --disk {con
 Upload the prepared zip, then run:
 
 ```bash
+python -m src.remote.worker --run-zip /workspace/{package_dir.parent.name}.zip --preflight
 python -m src.remote.worker --run-zip /workspace/{package_dir.parent.name}.zip
 ```
 

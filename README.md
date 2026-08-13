@@ -73,6 +73,7 @@ This creates `output/<run_id>/vast/` and `output/<run_id>.zip`. Upload the zip
 to a Vast.ai instance running the GitHub-built image, then run:
 
 ```bash
+python -m src.remote.worker --run-zip /workspace/<run_id>.zip --preflight
 python -m src.remote.worker --run-zip /workspace/<run_id>.zip
 ```
 

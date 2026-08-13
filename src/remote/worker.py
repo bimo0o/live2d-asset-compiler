@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -16,6 +17,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workspace", default="/workspace/live2d_jobs", help="Remote working directory")
     parser.add_argument("--keep-workdir", action="store_true", help="Do not delete extracted working directory")
     parser.add_argument("--skip-decomposition", action="store_true", help="Package an already populated run without launching Qwen")
+    parser.add_argument("--preflight", action="store_true", help="Check zip, CUDA, imports, and disk without launching Qwen")
     args = parser.parse_args(argv)
 
     run_zip = Path(args.run_zip).resolve()
@@ -27,6 +29,11 @@ def main(argv: list[str] | None = None) -> int:
     run_dir = _extract_run_zip(run_zip, workspace)
     _write_worker_status(run_dir, "running")
     try:
+        if args.preflight:
+            report = _preflight(run_dir, workspace)
+            _write_worker_status(run_dir, "preflight_complete")
+            print(json.dumps(report, indent=2))
+            return 0
         if not args.skip_decomposition:
             _run_decomposition(run_dir)
         _assert_remote_outputs(run_dir)
@@ -63,6 +70,61 @@ def _run_decomposition(run_dir: Path) -> None:
     if not script.exists():
         raise FileNotFoundError(f"Missing remote decomposition script: {script}")
     subprocess.run([sys.executable, str(script), "--run-dir", str(run_dir)], check=True)
+
+
+def _preflight(run_dir: Path, workspace: Path) -> dict:
+    source = run_dir / "upscale" / "master_2x.png"
+    prompt = run_dir / "analysis" / "qwen_prompt.txt"
+    targets = run_dir / "analysis" / "material_targets.json"
+    script = run_dir / "vast" / "run_remote_decomposition.py"
+    missing = [str(path) for path in (source, prompt, targets, script) if not path.exists()]
+    if missing:
+        raise FileNotFoundError(f"Prepared run is missing files: {missing}")
+
+    report = {
+        "python": sys.version,
+        "executable": sys.executable,
+        "workspace": str(workspace),
+        "free_disk_gb": _free_disk_gb(workspace),
+        "files": {
+            "source": str(source),
+            "prompt": str(prompt),
+            "targets": str(targets),
+            "runner": str(script),
+        },
+        "torch": None,
+        "cuda_available": False,
+        "gpu": None,
+        "qwen_import": False,
+    }
+    try:
+        import torch
+
+        report["torch"] = torch.__version__
+        report["cuda_available"] = bool(torch.cuda.is_available())
+        if torch.cuda.is_available():
+            report["gpu"] = torch.cuda.get_device_name(0)
+            report["vram_gb"] = round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2)
+    except Exception as exc:
+        report["torch_error"] = str(exc)
+    try:
+        from diffusers import QwenImageLayeredPipeline  # noqa: F401
+
+        report["qwen_import"] = True
+    except Exception as exc:
+        report["qwen_import_error"] = str(exc)
+    if not report["cuda_available"]:
+        raise RuntimeError(f"CUDA is not available: {report}")
+    if not report["qwen_import"]:
+        raise RuntimeError(f"QwenImageLayeredPipeline import failed: {report}")
+    if report["free_disk_gb"] < 15:
+        raise RuntimeError(f"Not enough free disk for remote job: {report}")
+    return report
+
+
+def _free_disk_gb(path: Path) -> float:
+    usage = shutil.disk_usage(path)
+    return round(usage.free / 1024**3, 2)
 
 
 def _assert_remote_outputs(run_dir: Path) -> None:
