@@ -36,7 +36,7 @@ class PipelineContext:
             status=status,
             timestamp=datetime.now().isoformat(timespec="seconds"),
             inputs_hash=inputs_hash,
-            outputs=[str(path.relative_to(self.run_dir)) for path in outputs or []],
+            outputs=[self._display_path(path) for path in outputs or []],
             warnings=warnings or [],
         )
         self.run.info.stages = [item for item in self.run.info.stages if item.stage != stage]
@@ -54,6 +54,15 @@ class PipelineContext:
             if item.stage == stage:
                 return item.status
         return None
+
+    def _display_path(self, path: Path) -> str:
+        try:
+            return str(path.relative_to(self.run_dir))
+        except ValueError:
+            try:
+                return str(path.relative_to(self.run_dir.parent))
+            except ValueError:
+                return str(path)
 
     def save_run(self) -> None:
         self.run_json_path.write_text(self.run.info.model_dump_json(indent=2), encoding="utf-8")

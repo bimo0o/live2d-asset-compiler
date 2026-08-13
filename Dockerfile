@@ -25,5 +25,4 @@ RUN python3 -m pip install --upgrade pip setuptools wheel \
 
 COPY . .
 
-CMD ["python3", "app.py", "--help"]
-
+CMD ["python3", "-m", "src.remote.worker", "--help"]

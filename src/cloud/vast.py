@@ -32,11 +32,10 @@ Use the Docker image built from this GitHub repository:
 {config.vast.docker_image}
 ```
 
-Upload this run directory, or `output/{package_dir.parent.name}.zip`, to the Vast.ai instance, then run:
+Upload `output/{package_dir.parent.name}.zip` to the Vast.ai instance, then run:
 
 ```bash
-cd {config.vast.workdir}
-python vast/run_remote_decomposition.py --run-dir .
+python -m src.remote.worker --run-zip /workspace/{package_dir.parent.name}.zip
 ```
 
 Expected output contract:
@@ -49,7 +48,14 @@ decomposition/layers.json
 decomposition/preview.png
 ```
 
-After downloading the run directory back locally, resume:
+The worker writes:
+
+```text
+/workspace/{package_dir.parent.name}_done.zip
+```
+
+Download that `*_done.zip`, extract it over `output/{package_dir.parent.name}/`,
+then resume locally:
 
 ```powershell
 python app.py resume {package_dir.parent.name}
@@ -59,12 +65,8 @@ The generated remote runner uses the Qwen Image Layered pipeline contract.
 Keep the output paths unchanged so the local compiler can continue after the
 run directory is downloaded back.
 
-If the image still contains `YOUR_GITHUB_OWNER`, update `config.json` before
-creating the Vast instance:
-
-```json
-"docker_image": "ghcr.io/<owner>/live2d-asset-compiler:latest"
-```
+If the image is private, make the GHCR package public or run Docker login on
+the Vast instance before starting the container.
 """,
         encoding="utf-8",
     )
@@ -125,6 +127,12 @@ Create one from an offer id:
 
 ```bash
 vastai create instance <offer_id> --image {config.vast.docker_image} --disk {config.vast.disk_gb} --ssh --direct --label live2d-qwen-layered
+```
+
+Upload the prepared zip, then run:
+
+```bash
+python -m src.remote.worker --run-zip /workspace/{package_dir.parent.name}.zip
 ```
 
 If the GHCR package is private, create a GitHub personal access token with

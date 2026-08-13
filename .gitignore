@@ -4,4 +4,5 @@ __pycache__/
 venv/
 output/
 input/
+remote_smoke/
 .pytest_cache/

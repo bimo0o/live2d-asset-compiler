@@ -39,6 +39,10 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("run_id")
     validate.add_argument("--config", default="config.json", help="Path to config.json")
 
+    archive = subparsers.add_parser("archive-run", help="Create a zip payload for a prepared run")
+    archive.add_argument("run_id")
+    archive.add_argument("--config", default="config.json", help="Path to config.json")
+
     return parser
 
 
@@ -54,6 +58,10 @@ def main(argv: list[str] | None = None) -> int:
             run = pipeline.prepare_vast(input_override=Path(args.input) if args.input else None, quality=args.quality)
         elif args.command == "validate-run":
             run = pipeline.validate_run(args.run_id)
+        elif args.command == "archive-run":
+            archive_path = pipeline.archive_run(args.run_id)
+            print(f"Archive: {archive_path}")
+            return 0
         else:
             run = pipeline.resume(args.run_id)
     except RuntimeError as exc:
@@ -68,5 +76,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Report: {report}")
     elif vast_package.exists():
         print(f"Vast job package: {vast_package}")
+        archive = run.run_dir.parent / f"{run.run_id}.zip"
+        if archive.exists():
+            print(f"Vast payload zip: {archive}")
         print(f"Status: {run.info.status}")
     return 0

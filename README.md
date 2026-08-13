@@ -39,6 +39,7 @@ python app.py build --input input/master.png
 python app.py build --quality standard
 python app.py prepare-vast
 python app.py validate-run <run_id>
+python app.py archive-run <run_id>
 python app.py resume <run_id>
 ```
 
@@ -68,10 +69,15 @@ Use:
 python app.py prepare-vast
 ```
 
-This creates `output/<run_id>/vast/` with the Vast.ai job contract. Upload the
-run archive to a Vast.ai instance running the GitHub-built image, generate
-full-canvas RGBA layers into `decomposition/raw/`, download the run directory
-back, then run:
+This creates `output/<run_id>/vast/` and `output/<run_id>.zip`. Upload the zip
+to a Vast.ai instance running the GitHub-built image, then run:
+
+```bash
+python -m src.remote.worker --run-zip /workspace/<run_id>.zip
+```
+
+The worker creates `/workspace/<run_id>_done.zip`. Download and extract it over
+`output/<run_id>/`, then run:
 
 ```powershell
 python app.py validate-run <run_id>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -87,10 +88,23 @@ class Pipeline:
         from src.cloud.vast import write_vast_job_package
 
         outputs = write_vast_job_package(context.run_dir, self.config)
+        archive = self.archive_run(run.run_id)
+        outputs.append(archive)
         context.record_stage("vast", "ready", outputs)
         run.info.status = "waiting_for_vast"
         context.save_run()
         return run
+
+    def archive_run(self, run_id: str) -> Path:
+        run = load_existing_run(self.config, run_id)
+        archive_path = run.run_dir.parent / f"{run.run_id}.zip"
+        if archive_path.exists():
+            archive_path.unlink()
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+            for path in run.run_dir.rglob("*"):
+                if path.is_file():
+                    archive.write(path, path.relative_to(run.run_dir.parent))
+        return archive_path
 
     def validate_run(self, run_id: str) -> PipelineRun:
         run = load_existing_run(self.config, run_id)
