@@ -38,6 +38,32 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_realesrgan(source: Path, output: Path, scale: int) -> bool:
+    python_script = Path("/opt/Real-ESRGAN/inference_realesrgan.py")
+    model_path = Path("/opt/Real-ESRGAN/weights/RealESRGAN_x4plus_anime_6B.pth")
+    if python_script.exists() and model_path.exists():
+        output_dir = output.parent / "realesrgan_tmp"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        command = [
+            sys.executable,
+            str(python_script),
+            "-n",
+            "RealESRGAN_x4plus_anime_6B",
+            "-i",
+            str(source),
+            "-o",
+            str(output_dir),
+            "--outscale",
+            str(scale),
+            "--fp32",
+        ]
+        try:
+            subprocess.run(command, cwd="/opt/Real-ESRGAN", check=True)
+        except Exception:
+            return False
+        candidates = sorted(output_dir.glob(f"{source.stem}*"))
+        if candidates:
+            candidates[0].replace(output)
+            return output.exists()
     executable = _which("realesrgan-ncnn-vulkan") or _which("realesrgan")
     if not executable:
         return False
@@ -57,4 +83,3 @@ def _which(name: str) -> str | None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -99,7 +99,7 @@ class AnalysisStage(Stage):
     name = "analysis"
 
     def run(self, context: PipelineContext, **kwargs: Any) -> None:
-        source = context.run_dir / "upscale" / f"master_{context.config.upscale.scale}x.png"
+        source = _analysis_source(context)
         output_dir = context.dir("analysis")
         output = output_dir / "character_analysis.json"
         warnings: list[str] = []
@@ -146,7 +146,7 @@ class AnalysisStage(Stage):
         context.record_stage(self.name, "complete", [output, targets_path, prompt_path, overlay_path], file_sha256(source), warnings)
 
     def write_fallback(self, context: PipelineContext, quality: str, reason: str) -> None:
-        source = context.run_dir / "upscale" / f"master_{context.config.upscale.scale}x.png"
+        source = _analysis_source(context)
         output_dir = context.dir("analysis")
         analysis = {
             "status": "review_required",
@@ -613,6 +613,13 @@ def _qwen_prompt(material_targets: dict[str, Any]) -> str:
 
 def _psd_name(name: str) -> str:
     return name.encode("ascii", errors="replace").decode("ascii")[:31]
+
+
+def _analysis_source(context: PipelineContext) -> Path:
+    neural = context.run_dir / "upscale" / "master_neural_2x.png"
+    if neural.exists():
+        return neural
+    return context.run_dir / "upscale" / f"master_{context.config.upscale.scale}x.png"
 
 
 def _sanitize_part_id(value: str) -> str:

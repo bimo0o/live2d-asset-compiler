@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-venv \
+    wget \
+    ffmpeg \
     libglib2.0-0 \
     libgl1 \
     && rm -rf /var/lib/apt/lists/*
@@ -22,6 +24,13 @@ RUN python3 -m pip install --upgrade pip setuptools wheel \
     && python3 -m pip install -r requirements.txt \
     && python3 -m pip install -r requirements-vast.txt \
     && python3 -m pip install git+https://github.com/huggingface/diffusers
+
+RUN git clone --depth 1 https://github.com/xinntao/Real-ESRGAN.git /opt/Real-ESRGAN \
+    && cd /opt/Real-ESRGAN \
+    && python3 -m pip install -r requirements.txt \
+    && python3 setup.py develop \
+    && mkdir -p weights \
+    && wget -O weights/RealESRGAN_x4plus_anime_6B.pth https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth
 
 COPY . .
 

@@ -18,6 +18,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keep-workdir", action="store_true", help="Do not delete extracted working directory")
     parser.add_argument("--skip-decomposition", action="store_true", help="Package an already populated run without launching Qwen")
     parser.add_argument("--preflight", action="store_true", help="Check zip, CUDA, imports, and disk without launching Qwen")
+    parser.add_argument("--plan-only", action="store_true", help="Run remote neural upscale and OpenRouter planning, then package the run")
     args = parser.parse_args(argv)
 
     run_zip = Path(args.run_zip).resolve()
@@ -33,6 +34,13 @@ def main(argv: list[str] | None = None) -> int:
             report = _preflight(run_dir, workspace)
             _write_worker_status(run_dir, "preflight_complete")
             print(json.dumps(report, indent=2))
+            return 0
+        if args.plan_only:
+            _run_neural_upscale(run_dir)
+            _run_local_analysis_refresh(run_dir)
+            _write_worker_status(run_dir, "plan_complete")
+            done_zip = _zip_run(run_dir, run_zip)
+            print(f"REMOTE_PLAN_ZIP={done_zip}")
             return 0
         if not args.skip_decomposition:
             _run_neural_upscale(run_dir)
@@ -77,6 +85,19 @@ def _run_neural_upscale(run_dir: Path) -> None:
     subprocess.run([sys.executable, "-m", "src.remote.upscale", "--run-dir", str(run_dir)], check=True)
 
 
+def _run_local_analysis_refresh(run_dir: Path) -> None:
+    from src.pipeline.context import PipelineContext
+    from src.pipeline.stages import AnalysisStage
+    from src.schemas.config import AppConfig
+    from src.schemas.run import PipelineRun, RunInfo
+
+    config = AppConfig.load(Path("config.json"))
+    info = RunInfo.model_validate_json((run_dir / "run.json").read_text(encoding="utf-8"))
+    run = PipelineRun(run_id=run_dir.name, run_dir=run_dir, info=info)
+    context = PipelineContext(config, run)
+    AnalysisStage().run(context, quality=run.info.quality)
+
+
 def _preflight(run_dir: Path, workspace: Path) -> dict:
     source = run_dir / "upscale" / "master_2x.png"
     prompt = run_dir / "analysis" / "qwen_prompt.txt"
@@ -102,6 +123,8 @@ def _preflight(run_dir: Path, workspace: Path) -> dict:
         "gpu": None,
         "qwen_import": False,
         "realesrgan_cli": bool(_which("realesrgan-ncnn-vulkan") or _which("realesrgan")),
+        "realesrgan_python": Path("/opt/Real-ESRGAN/inference_realesrgan.py").exists(),
+        "realesrgan_anime_weights": Path("/opt/Real-ESRGAN/weights/RealESRGAN_x4plus_anime_6B.pth").exists(),
     }
     try:
         import torch

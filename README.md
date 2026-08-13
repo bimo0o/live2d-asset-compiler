@@ -85,11 +85,14 @@ to a Vast.ai instance running the GitHub-built image, then run:
 
 ```bash
 python -m src.remote.worker --run-zip /workspace/<run_id>.zip --preflight
+python -m src.remote.worker --run-zip /workspace/<run_id>.zip --plan-only
 python -m src.remote.worker --run-zip /workspace/<run_id>.zip
 ```
 
-The worker creates `/workspace/<run_id>_done.zip`. Download and extract it over
-`output/<run_id>/`, then run:
+`--plan-only` creates `/workspace/<run_id>_done.zip` with neural upscale and
+OpenRouter target overlay, but without Qwen decomposition. Inspect that first.
+The full worker run creates `/workspace/<run_id>_done.zip` with decomposition
+layers. Download and extract it over `output/<run_id>/`, then run:
 
 ```powershell
 python app.py validate-run <run_id>

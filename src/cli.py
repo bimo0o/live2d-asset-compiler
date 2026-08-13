@@ -84,11 +84,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Output: {run.run_dir}")
     report = run.run_dir / "reports" / "report.html"
     vast_package = run.run_dir / "vast"
+    overlay = run.run_dir / "previews" / "target_overlay.png"
     if report.exists():
         print(f"Report: {report}")
-    elif (run.run_dir / "previews" / "target_overlay.png").exists():
-        print(f"Target overlay: {run.run_dir / 'previews' / 'target_overlay.png'}")
-    elif vast_package.exists():
+    if overlay.exists():
+        print(f"Target overlay: {overlay}")
+    if vast_package.exists():
         print(f"Vast job package: {vast_package}")
         archive = run.run_dir.parent / f"{run.run_id}.zip"
         if archive.exists():

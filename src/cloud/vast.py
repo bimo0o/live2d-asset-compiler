@@ -36,6 +36,7 @@ Upload `output/{package_dir.parent.name}.zip` to the Vast.ai instance, then run:
 
 ```bash
 python -m src.remote.worker --run-zip /workspace/{package_dir.parent.name}.zip --preflight
+python -m src.remote.worker --run-zip /workspace/{package_dir.parent.name}.zip --plan-only
 python -m src.remote.worker --run-zip /workspace/{package_dir.parent.name}.zip
 ```
 
@@ -134,6 +135,7 @@ Upload the prepared zip, then run:
 
 ```bash
 python -m src.remote.worker --run-zip /workspace/{package_dir.parent.name}.zip --preflight
+python -m src.remote.worker --run-zip /workspace/{package_dir.parent.name}.zip --plan-only
 python -m src.remote.worker --run-zip /workspace/{package_dir.parent.name}.zip
 ```
 
