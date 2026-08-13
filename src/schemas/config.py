@@ -56,6 +56,10 @@ class VastConfig(BaseModel):
     workdir: str = "/workspace/live2d_compiler"
     qwen_resolution: int = 640
     qwen_steps: int = 50
+    reconstruction_model: str = "Qwen/Qwen-Image-Edit"
+    reconstruction_resolution: int = 1024
+    reconstruction_steps: int = 28
+    max_reconstruction_tasks: int = 3
 
 
 class ToggleModelConfig(BaseModel):

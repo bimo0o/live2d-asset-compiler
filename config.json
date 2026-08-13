@@ -41,15 +41,19 @@
     "docker_image": "ghcr.io/bimo0o/live2d-asset-compiler:latest",
     "workdir": "/workspace/live2d_compiler",
     "qwen_resolution": 640,
-    "qwen_steps": 50
+    "qwen_steps": 50,
+    "reconstruction_model": "Qwen/Qwen-Image-Edit",
+    "reconstruction_resolution": 1024,
+    "reconstruction_steps": 28,
+    "max_reconstruction_tasks": 3
   },
   "segmentation": {
     "enabled": false,
     "model": "configurable"
   },
   "reconstruction": {
-    "enabled": false,
-    "model": "configurable"
+    "enabled": true,
+    "model": "Qwen/Qwen-Image-Edit"
   },
   "psd": {
     "enabled": true

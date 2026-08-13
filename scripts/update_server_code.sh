@@ -30,23 +30,32 @@ cd "${PROJECT_DIR}"
 
 download "src/ai/openrouter.py"
 download "src/pipeline/stages.py"
+download "src/remote/decompose.py"
 download "src/remote/worker.py"
 download "src/remote/upscale.py"
+download "src/cloud/vast.py"
+download "src/schemas/config.py"
 download "scripts/patch_torchvision.py"
 
 python3 -m py_compile \
   "${TMP_DIR}/src/ai/openrouter.py" \
   "${TMP_DIR}/src/pipeline/stages.py" \
+  "${TMP_DIR}/src/remote/decompose.py" \
   "${TMP_DIR}/src/remote/worker.py" \
   "${TMP_DIR}/src/remote/upscale.py" \
+  "${TMP_DIR}/src/cloud/vast.py" \
+  "${TMP_DIR}/src/schemas/config.py" \
   "${TMP_DIR}/scripts/patch_torchvision.py"
 
 copy_checked "src/ai/openrouter.py"
 copy_checked "src/pipeline/stages.py"
+copy_checked "src/remote/decompose.py"
 copy_checked "src/remote/worker.py"
 copy_checked "src/remote/upscale.py"
+copy_checked "src/cloud/vast.py"
+copy_checked "src/schemas/config.py"
 copy_checked "scripts/patch_torchvision.py"
 
 python3 scripts/patch_torchvision.py || true
-python3 -m py_compile src/ai/openrouter.py src/pipeline/stages.py src/remote/worker.py src/remote/upscale.py
+python3 -m py_compile src/ai/openrouter.py src/pipeline/stages.py src/remote/decompose.py src/remote/worker.py src/remote/upscale.py src/cloud/vast.py src/schemas/config.py
 echo "live2d compiler server code updated"

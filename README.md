@@ -1,7 +1,9 @@
 # One-Click AI Live2D Asset Compiler
 
-Phase 1 MVP for compiling a single character illustration into a Live2D-oriented
-asset package.
+Cloud-first compiler for turning a single character illustration into a
+Live2D-oriented material package. The target is not a blind PSD export: the
+pipeline plans Live2D parts, runs coarse neural decomposition on Vast.ai, and
+then attempts hidden-area reconstruction for rig-critical materials.
 
 ## Quick Start
 
@@ -20,6 +22,7 @@ The build writes a unique run directory under `output/` with:
 - original source copy
 - 2x upscaled image
 - coarse decomposition layers
+- hidden-area reconstruction diagnostics
 - contact sheet
 - material PNGs
 - `manifest.json`
@@ -27,9 +30,9 @@ The build writes a unique run directory under `output/` with:
 - HTML report
 
 The default configuration is cloud-first. Heavy reasoning runs through
-OpenRouter, and Qwen Image Layered decomposition is expected to run on Vast.ai.
-The deterministic local fallback still exists for development, but it is
-disabled by default.
+OpenRouter, and Qwen Image Layered / Qwen Image Edit are expected to run on
+Vast.ai. The deterministic local fallback still exists for development, but it
+is disabled by default.
 
 ## Commands
 
@@ -92,14 +95,15 @@ python3 -m src.remote.worker --run-zip /workspace/<run_id>.zip
 `--plan-only` creates `/workspace/<run_id>_done.zip` with neural upscale and
 OpenRouter target overlay, but without Qwen decomposition. Inspect that first.
 The full worker run creates `/workspace/<run_id>_done.zip` with decomposition
-layers. Download and extract it over `output/<run_id>/`, then run:
+layers plus `reconstruction/*` diagnostics for hidden pixels. Download and
+extract it over `output/<run_id>/`, then run:
 
 ```powershell
 python app.py validate-run <run_id>
 python app.py resume <run_id>
 ```
 
-## Phase 1 Scope
+## Current Scope
 
 Implemented:
 
@@ -109,6 +113,9 @@ Implemented:
 - faithful 2x upscale
 - OpenRouter analysis adapter
 - Qwen-layered adapter interface with Vast.ai handoff
+- remote Qwen Image Layered runner
+- limited Qwen Image Edit hidden-area reconstruction pass
+- reconstruction QA files under `reconstruction/`
 - contact sheet generation
 - basic Live2D-oriented manifest
 - material PNG export
@@ -117,10 +124,10 @@ Implemented:
 - stage metadata for resume-ready runs
 - remote artifact validation
 
-Not implemented yet:
+Still rough / not production-perfect yet:
 
-- real Qwen Image Layered inference
-- segmentation models
-- hidden-area reconstruction
-- advanced validation and QA metrics
+- independent SAM-style segmentation models
+- recursive decomposition of subparts
+- advanced perceptual QA metrics
 - one-click web UI
+- full automatic artist-grade correction when Qwen returns bad layers

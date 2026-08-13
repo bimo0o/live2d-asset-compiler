@@ -75,10 +75,19 @@ def _extract_run_zip(run_zip: Path, workspace: Path) -> Path:
 
 
 def _run_decomposition(run_dir: Path) -> None:
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("src.remote.decompose"):
+            subprocess.run([sys.executable, "-m", "src.remote.decompose", "--run-dir", str(run_dir)], check=True)
+            return
+    except Exception:
+        pass
     script = run_dir / "vast" / "run_remote_decomposition.py"
-    if not script.exists():
-        raise FileNotFoundError(f"Missing remote decomposition script: {script}")
-    subprocess.run([sys.executable, str(script), "--run-dir", str(run_dir)], check=True)
+    if script.exists():
+        subprocess.run([sys.executable, str(script), "--run-dir", str(run_dir)], check=True)
+        return
+    raise FileNotFoundError(f"Missing remote decomposition runner: {script} and src.remote.decompose")
 
 
 def _run_neural_upscale(run_dir: Path) -> None:
@@ -103,9 +112,11 @@ def _preflight(run_dir: Path, workspace: Path) -> dict:
     prompt = run_dir / "analysis" / "qwen_prompt.txt"
     targets = run_dir / "analysis" / "material_targets.json"
     script = run_dir / "vast" / "run_remote_decomposition.py"
+    job_config = run_dir / "vast" / "vast_job.json"
     missing = [str(path) for path in (source, prompt, targets, script) if not path.exists()]
     if missing:
         raise FileNotFoundError(f"Prepared run is missing files: {missing}")
+    job = json.loads(job_config.read_text(encoding="utf-8")) if job_config.exists() else {}
 
     report = {
         "python": sys.version,
@@ -118,10 +129,19 @@ def _preflight(run_dir: Path, workspace: Path) -> dict:
             "targets": str(targets),
             "runner": str(script),
         },
+        "model": job.get("model"),
+        "layers": job.get("layers"),
+        "qwen_resolution": job.get("qwen_resolution"),
+        "qwen_steps": job.get("qwen_steps"),
+        "reconstruction_model": job.get("reconstruction_model"),
+        "reconstruction_resolution": job.get("reconstruction_resolution"),
+        "reconstruction_steps": job.get("reconstruction_steps"),
+        "max_reconstruction_tasks": job.get("max_reconstruction_tasks"),
         "torch": None,
         "cuda_available": False,
         "gpu": None,
         "qwen_import": False,
+        "qwen_edit_import": False,
         "realesrgan_cli": bool(_which("realesrgan-ncnn-vulkan") or _which("realesrgan")),
         "realesrgan_python": Path("/opt/Real-ESRGAN/inference_realesrgan.py").exists(),
         "realesrgan_anime_weights": Path("/opt/Real-ESRGAN/weights/RealESRGAN_x4plus_anime_6B.pth").exists(),
@@ -142,6 +162,18 @@ def _preflight(run_dir: Path, workspace: Path) -> dict:
         report["qwen_import"] = True
     except Exception as exc:
         report["qwen_import_error"] = str(exc)
+    try:
+        from diffusers import QwenImageEditInpaintPipeline  # noqa: F401
+
+        report["qwen_edit_import"] = True
+    except Exception as exc:
+        try:
+            from diffusers import DiffusionPipeline  # noqa: F401
+
+            report["qwen_edit_import"] = "generic_diffusion_pipeline"
+            report["qwen_edit_import_warning"] = str(exc)
+        except Exception as fallback_exc:
+            report["qwen_edit_import_error"] = f"{exc}; generic fallback failed: {fallback_exc}"
     if not report["cuda_available"]:
         raise RuntimeError(f"CUDA is not available: {report}")
     if not report["qwen_import"]:

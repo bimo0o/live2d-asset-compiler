@@ -361,6 +361,9 @@ class ManifestStage(Stage):
             if layer_image.size != image.size:
                 raise ValueError(f"Layer {layer_path} has size {layer_image.size}, expected {image.size}")
             item_warnings = list(item.get("warnings") or [])
+            reconstruction = item.get("reconstruction") or {}
+            if reconstruction.get("required") and reconstruction.get("status") != "complete":
+                item_warnings.append(f"hidden reconstruction {reconstruction.get('status', 'pending')}")
             item_warnings.extend(validate_material_image(layer_path, image.size))
             bbox = alpha_bbox(layer_image)
             if bbox == [0, 0, 0, 0]:
@@ -381,6 +384,10 @@ class ManifestStage(Stage):
                     deformable=item["group"] not in {"ROOT"},
                     physics_candidate=item["group"] in {"HAIR", "ACCESSORIES", "CLOTHES"},
                     physics_type=_physics_type(item["group"]),
+                    reconstruction=item.get("reconstruction") or {
+                        "required": bool(item.get("needs_reconstruction", False)),
+                        "status": "pending" if item.get("needs_reconstruction", False) else "not_required",
+                    },
                     validation=ValidationStatus(coverage=coverage, confidence=item["confidence"], warnings=item_warnings),
                 )
             )
@@ -636,8 +643,10 @@ def _qwen_prompt(material_targets: dict[str, Any]) -> str:
     return (
         "Decompose this single front-facing anime character illustration into clean transparent RGBA layers "
         "for Live2D material preparation. Preserve the exact source identity, face, costume, colors, line art, "
-        "geometry, and visible pixels. Do not redesign the character. Prefer coherent semantic materials over "
-        "arbitrary color fragments. Useful Live2D targets include: "
+        "geometry, and visible pixels. Do not redesign the character. Create materials that are useful for rigging, "
+        "not a flat screenshot split into arbitrary fragments. Prefer coherent semantic materials over arbitrary "
+        "color fragments. Preserve transparent alpha. Mark occluded/covered materials so a later reconstruction "
+        "pass can complete hidden pixels behind hair, clothes, arms, and accessories. Useful Live2D targets include: "
         f"{part_text}. Output layers from back to front where possible."
     )
 
