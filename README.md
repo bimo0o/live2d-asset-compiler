@@ -37,6 +37,7 @@ disabled by default.
 python app.py build
 python app.py build --input input/master.png
 python app.py build --quality standard
+python app.py plan-openrouter
 python app.py prepare-vast
 python app.py validate-run <run_id>
 python app.py archive-run <run_id>
@@ -64,6 +65,16 @@ ghcr.io/<owner>/live2d-asset-compiler:latest
 ```
 
 Use:
+
+```powershell
+$env:OPENROUTER_API_KEY="..."
+python app.py plan-openrouter --input "input/master (2).png"
+```
+
+Check `output/<run_id>/previews/target_overlay.png` first. This is the cheap
+neural planning gate before renting GPU time.
+
+Then use:
 
 ```powershell
 python app.py prepare-vast

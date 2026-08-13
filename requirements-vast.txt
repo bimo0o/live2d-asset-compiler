@@ -6,4 +6,4 @@ transformers
 accelerate
 safetensors
 sentencepiece
-
+opencv-python-headless

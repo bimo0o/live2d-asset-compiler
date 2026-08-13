@@ -31,7 +31,34 @@ class OpenRouterClient:
             "[x,y,w,h], depth, deformable, occluded, needs_reconstruction, confidence, "
             "and short reasoning. Also include character type, pose, full_body, and background."
         )
-        return self._vision_json(image, prompt, _character_analysis_schema())
+        return self._vision_json(image, prompt, _character_analysis_schema(), "live2d_character_analysis")
+
+    def plan_live2d_targets(self, full_image: Path, face_crop: Path | None = None) -> dict[str, Any]:
+        full_prompt = (
+            "You are a senior Live2D material separation artist. Analyze the full anime character image. "
+            "Return strict JSON. Identify the character silhouette, head, face, hair groups, clothes, arms, hands, "
+            "legs, and accessories. Use pixel coordinates in the provided full image. Be conservative: if unsure, "
+            "mark confidence low rather than guessing."
+        )
+        full_plan = self._vision_json(full_image, full_prompt, _region_plan_schema(), "full_body_live2d_plan")
+        face_plan: dict[str, Any] = {"regions": [], "warnings": []}
+        if face_crop and face_crop.exists():
+            face_prompt = (
+                "Analyze this FACE CROP for Live2D material separation. Return strict JSON. Locate exact visible "
+                "left eye, right eye, eyebrows, mouth, nose, and face contour in CROP pixel coordinates. "
+                "The mouth box must tightly cover the visible mouth only, not collar, chin shadow, or clothing. "
+                "Eye boxes must tightly cover visible eyeball/iris/lashes only, not hair."
+            )
+            face_plan = self._vision_json(face_crop, face_prompt, _region_plan_schema(), "face_detail_live2d_plan")
+        return {"full": full_plan, "face_crop": face_plan, "warnings": []}
+
+    def validate_target_overlay(self, overlay: Path) -> dict[str, Any]:
+        prompt = (
+            "Review this Live2D target overlay. Return strict JSON. Check whether eye_l, eye_r, and mouth boxes "
+            "are tightly aligned to the actual eyes and mouth. Do not be polite. Mark any box that touches hair, "
+            "collar, clothing, or misses the intended feature."
+        )
+        return self._vision_json(overlay, prompt, _overlay_validation_schema(), "live2d_overlay_validation")
 
     def analyze_layer(self, image: Path, layer: Path) -> dict[str, Any]:
         raise NotImplementedError("OpenRouter layer analysis starts in Phase 2.")
@@ -39,7 +66,7 @@ class OpenRouterClient:
     def validate_result(self, images: list[Path], manifest: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError("OpenRouter QA starts in Phase 2.")
 
-    def _vision_json(self, image: Path, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+    def _vision_json(self, image: Path, prompt: str, schema: dict[str, Any], schema_name: str = "live2d_json") -> dict[str, Any]:
         if not self.enabled:
             return {"status": "disabled", "character": {}, "parts": [], "warnings": ["OpenRouter disabled"]}
         api_key = os.environ.get(self.api_key_env)
@@ -61,7 +88,7 @@ class OpenRouterClient:
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
-                    "name": "live2d_character_analysis",
+                    "name": schema_name,
                     "strict": True,
                     "schema": schema,
                 },
@@ -138,6 +165,76 @@ def _character_analysis_schema() -> dict[str, Any]:
             "confidence",
             "reasoning",
         ],
+        "additionalProperties": False,
+    }
+
+
+def _region_plan_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "coordinate_space": {"type": "string"},
+            "regions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "group": {
+                            "type": "string",
+                            "enum": ["ROOT", "HEAD", "EYES", "BROWS", "MOUTH", "HAIR", "BODY", "CLOTHES", "ACCESSORIES", "EFFECTS"],
+                        },
+                        "bbox": {"type": "array", "items": {"type": "integer"}, "minItems": 4, "maxItems": 4},
+                        "depth": {"type": "integer"},
+                        "deformable": {"type": "boolean"},
+                        "occluded": {"type": "boolean"},
+                        "needs_reconstruction": {"type": "boolean"},
+                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        "reasoning": {"type": "string"},
+                    },
+                    "required": [
+                        "id",
+                        "group",
+                        "bbox",
+                        "depth",
+                        "deformable",
+                        "occluded",
+                        "needs_reconstruction",
+                        "confidence",
+                        "reasoning",
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+            "warnings": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["coordinate_space", "regions", "warnings"],
+        "additionalProperties": False,
+    }
+
+
+def _overlay_validation_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "overall_status": {"type": "string", "enum": ["ok", "needs_fix", "bad"]},
+            "checks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "status": {"type": "string", "enum": ["ok", "too_large", "too_small", "missed", "wrong_object"]},
+                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        "reasoning": {"type": "string"},
+                    },
+                    "required": ["id", "status", "confidence", "reasoning"],
+                    "additionalProperties": False,
+                },
+            },
+            "warnings": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["overall_status", "checks", "warnings"],
         "additionalProperties": False,
     }
     return {

@@ -35,6 +35,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2))
             return 0
         if not args.skip_decomposition:
+            _run_neural_upscale(run_dir)
             _run_decomposition(run_dir)
         _assert_remote_outputs(run_dir)
         _write_worker_status(run_dir, "complete")
@@ -72,6 +73,10 @@ def _run_decomposition(run_dir: Path) -> None:
     subprocess.run([sys.executable, str(script), "--run-dir", str(run_dir)], check=True)
 
 
+def _run_neural_upscale(run_dir: Path) -> None:
+    subprocess.run([sys.executable, "-m", "src.remote.upscale", "--run-dir", str(run_dir)], check=True)
+
+
 def _preflight(run_dir: Path, workspace: Path) -> dict:
     source = run_dir / "upscale" / "master_2x.png"
     prompt = run_dir / "analysis" / "qwen_prompt.txt"
@@ -96,6 +101,7 @@ def _preflight(run_dir: Path, workspace: Path) -> dict:
         "cuda_available": False,
         "gpu": None,
         "qwen_import": False,
+        "realesrgan_cli": bool(_which("realesrgan-ncnn-vulkan") or _which("realesrgan")),
     }
     try:
         import torch
@@ -120,6 +126,12 @@ def _preflight(run_dir: Path, workspace: Path) -> dict:
     if report["free_disk_gb"] < 15:
         raise RuntimeError(f"Not enough free disk for remote job: {report}")
     return report
+
+
+def _which(name: str) -> str | None:
+    from shutil import which
+
+    return which(name)
 
 
 def _free_disk_gb(path: Path) -> float:

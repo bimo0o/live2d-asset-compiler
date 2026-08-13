@@ -95,6 +95,19 @@ class Pipeline:
         context.save_run()
         return run
 
+    def plan_openrouter(self, input_override: Path | None = None, quality: str = "standard") -> PipelineRun:
+        run_id = self._new_run_id()
+        run_dir = Path(self.config.output.path) / run_id
+        run_dir.mkdir(parents=True, exist_ok=False)
+        run = PipelineRun(run_id=run_id, run_dir=run_dir, info=RunInfo(run_id=run_id, quality=quality))
+        context = PipelineContext(self.config, run)
+        context.save_run()
+        for stage in [InputStage(), UpscaleStage(), AnalysisStage()]:
+            stage.run(context, input_override=input_override, quality=quality)
+        run.info.status = "analysis_complete"
+        context.save_run()
+        return run
+
     def archive_run(self, run_id: str) -> Path:
         run = load_existing_run(self.config, run_id)
         archive_path = run.run_dir.parent / f"{run.run_id}.zip"

@@ -174,7 +174,9 @@ def main() -> int:
     parser.add_argument("--true-cfg-scale", type=float, default=4.0)
     args = parser.parse_args()
     run_dir = Path(args.run_dir).resolve()
-    source = run_dir / "upscale" / "master_2x.png"
+    source = run_dir / "upscale" / "master_neural_2x.png"
+    if not source.exists():
+        source = run_dir / "upscale" / "master_2x.png"
     if not source.exists():
         raise FileNotFoundError(f"Missing upscaled source: {source}")
 

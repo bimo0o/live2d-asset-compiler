@@ -31,6 +31,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Material planning preset",
     )
 
+    plan = subparsers.add_parser("plan-openrouter", help="Run OpenRouter multi-pass material planning only")
+    plan.add_argument("--config", default="config.json", help="Path to config.json")
+    plan.add_argument("--input", default=None, help="Optional explicit input image")
+    plan.add_argument(
+        "--quality",
+        choices=["beginner", "standard", "high"],
+        default="standard",
+        help="Material planning preset",
+    )
+
     resume = subparsers.add_parser("resume", help="Resume an existing run")
     resume.add_argument("run_id")
     resume.add_argument("--config", default="config.json", help="Path to config.json")
@@ -54,6 +64,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "build":
             run = pipeline.build(input_override=Path(args.input) if args.input else None, quality=args.quality)
+        elif args.command == "plan-openrouter":
+            run = pipeline.plan_openrouter(input_override=Path(args.input) if args.input else None, quality=args.quality)
         elif args.command == "prepare-vast":
             run = pipeline.prepare_vast(input_override=Path(args.input) if args.input else None, quality=args.quality)
         elif args.command == "validate-run":
@@ -74,6 +86,8 @@ def main(argv: list[str] | None = None) -> int:
     vast_package = run.run_dir / "vast"
     if report.exists():
         print(f"Report: {report}")
+    elif (run.run_dir / "previews" / "target_overlay.png").exists():
+        print(f"Target overlay: {run.run_dir / 'previews' / 'target_overlay.png'}")
     elif vast_package.exists():
         print(f"Vast job package: {vast_package}")
         archive = run.run_dir.parent / f"{run.run_id}.zip"

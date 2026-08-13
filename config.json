@@ -22,7 +22,9 @@
   },
   "upscale": {
     "enabled": true,
-    "scale": 2
+    "scale": 2,
+    "provider": "realesrgan_anime",
+    "remote_neural": true
   },
   "decomposition": {
     "enabled": true,

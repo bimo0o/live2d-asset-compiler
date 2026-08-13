@@ -111,6 +111,14 @@ class AnalysisStage(Stage):
         )
         try:
             analysis = client.analyze_character(source)
+            openrouter_plan = self._openrouter_plan(client, source, output_dir, kwargs.get("quality") or context.run.info.quality)
+            if openrouter_plan.get("parts"):
+                analysis = {
+                    "status": "openrouter_multi_pass",
+                    "character": analysis.get("character", {}),
+                    "parts": openrouter_plan["parts"],
+                    "warnings": analysis.get("warnings", []) + openrouter_plan.get("warnings", []),
+                }
         except Exception as exc:
             if context.config.openrouter.require:
                 raise
@@ -129,6 +137,12 @@ class AnalysisStage(Stage):
         targets_path.write_text(json.dumps(material_targets, indent=2, ensure_ascii=False), encoding="utf-8")
         prompt_path.write_text(_qwen_prompt(material_targets), encoding="utf-8")
         _write_target_overlay(source, material_targets, overlay_path)
+        if context.config.openrouter.enabled and not warnings:
+            try:
+                qa = client.validate_target_overlay(overlay_path)
+                (output_dir / "target_overlay_qa.json").write_text(json.dumps(qa, indent=2, ensure_ascii=False), encoding="utf-8")
+            except Exception as exc:
+                warnings.append(f"OpenRouter overlay QA failed: {exc}")
         context.record_stage(self.name, "complete", [output, targets_path, prompt_path, overlay_path], file_sha256(source), warnings)
 
     def write_fallback(self, context: PipelineContext, quality: str, reason: str) -> None:
@@ -150,6 +164,23 @@ class AnalysisStage(Stage):
         prompt_path.write_text(_qwen_prompt(material_targets), encoding="utf-8")
         _write_target_overlay(source, material_targets, overlay_path)
         context.record_stage(self.name, "review_required", [output, targets_path, prompt_path, overlay_path], file_sha256(source), [reason])
+
+    def _openrouter_plan(self, client: OpenRouterClient, source: Path, output_dir: Path, quality: str) -> dict[str, Any]:
+        image = open_rgba(source)
+        fallback_targets = _default_material_targets(quality, source)
+        face_part = next((item for item in fallback_targets if item["id"] == "head_face"), None)
+        face_crop_path = output_dir / "face_crop_for_openrouter.png"
+        crop_origin = [0, 0]
+        if face_part:
+            crop_box = _expand_bbox(face_part["bbox"], 0.35, 0.35)
+            crop_box = _clamp_bbox(crop_box, image.size)
+            crop_origin = [crop_box[0], crop_box[1]]
+            _crop_bbox(image, crop_box).save(face_crop_path)
+        plan = client.plan_live2d_targets(source, face_crop_path if face_crop_path.exists() else None)
+        parts = _merge_openrouter_regions(plan, crop_origin)
+        plan_path = output_dir / "openrouter_plan.json"
+        plan_path.write_text(json.dumps({**plan, "parts_full_canvas": parts}, indent=2, ensure_ascii=False), encoding="utf-8")
+        return {"parts": parts, "warnings": plan.get("warnings", [])}
 
 
 class DecompositionStage(Stage):
@@ -667,3 +698,57 @@ def _write_target_overlay(source: Path, material_targets: dict[str, Any], path: 
         draw.text((left + 4, top + 4), part["id"], fill=color)
     canvas.alpha_composite(overlay)
     save_png(canvas, path)
+
+
+def _clamp_bbox(bbox: list[int], size: tuple[int, int]) -> list[int]:
+    x, y, w, h = bbox
+    width, height = size
+    left = max(0, x)
+    top = max(0, y)
+    right = min(width, x + w)
+    bottom = min(height, y + h)
+    return [left, top, max(1, right - left), max(1, bottom - top)]
+
+
+def _crop_bbox(image: Image.Image, bbox: list[int]) -> Image.Image:
+    x, y, w, h = bbox
+    return image.crop((x, y, x + w, y + h))
+
+
+def _merge_openrouter_regions(plan: dict[str, Any], face_crop_origin: list[int]) -> list[dict[str, Any]]:
+    full_regions = plan.get("full", {}).get("regions", []) if isinstance(plan.get("full"), dict) else []
+    face_regions = plan.get("face_crop", {}).get("regions", []) if isinstance(plan.get("face_crop"), dict) else []
+    merged: dict[str, dict[str, Any]] = {}
+    for region in full_regions:
+        if _valid_region(region):
+            merged[_sanitize_part_id(region["id"])] = _normalize_region(region)
+    for region in face_regions:
+        if not _valid_region(region):
+            continue
+        item = _normalize_region(region)
+        item["bbox"] = [
+            int(item["bbox"][0] + face_crop_origin[0]),
+            int(item["bbox"][1] + face_crop_origin[1]),
+            int(item["bbox"][2]),
+            int(item["bbox"][3]),
+        ]
+        merged[item["id"]] = item
+    return list(merged.values())
+
+
+def _valid_region(region: Any) -> bool:
+    return isinstance(region, dict) and isinstance(region.get("bbox"), list) and len(region["bbox"]) == 4 and region.get("id")
+
+
+def _normalize_region(region: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": _sanitize_part_id(str(region.get("id") or "part")),
+        "group": str(region.get("group") or "ROOT"),
+        "bbox": [int(value) for value in region.get("bbox", [0, 0, 1, 1])],
+        "depth": int(region.get("depth", 50) or 50),
+        "deformable": bool(region.get("deformable", True)),
+        "occluded": bool(region.get("occluded", False)),
+        "needs_reconstruction": bool(region.get("needs_reconstruction", False)),
+        "confidence": float(region.get("confidence", 0.5) or 0.5),
+        "reasoning": str(region.get("reasoning", "")),
+    }

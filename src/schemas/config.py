@@ -35,6 +35,8 @@ class ExecutionConfig(BaseModel):
 class UpscaleConfig(BaseModel):
     enabled: bool = True
     scale: int = Field(default=2, ge=1, le=4)
+    provider: str = "realesrgan_anime"
+    remote_neural: bool = True
 
 
 class DecompositionConfig(BaseModel):
