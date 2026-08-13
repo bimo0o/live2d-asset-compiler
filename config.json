@@ -1,0 +1,59 @@
+{
+  "project": {
+    "name": "live2d_oneclick"
+  },
+  "input": {
+    "path": "input"
+  },
+  "output": {
+    "path": "output"
+  },
+  "openrouter": {
+    "enabled": true,
+    "api_key_env": "OPENROUTER_API_KEY",
+    "vision_model": "google/gemini-2.5-pro",
+    "image_model": "configurable",
+    "require": true
+  },
+  "execution": {
+    "profile": "cloud_first",
+    "allow_local_fallback": false,
+    "prepare_vast_job": true
+  },
+  "upscale": {
+    "enabled": true,
+    "scale": 2
+  },
+  "decomposition": {
+    "enabled": true,
+    "provider": "vast_qwen_layered",
+    "model": "Qwen/Qwen-Image-Layered",
+    "layers": 8,
+    "remote_artifacts_path": null
+  },
+  "vast": {
+    "enabled": true,
+    "api_key_env": "VAST_API_KEY",
+    "min_vram_gb": 24,
+    "disk_gb": 100,
+    "docker_image": "ghcr.io/bimo0o/live2d-asset-compiler:latest",
+    "workdir": "/workspace/live2d_compiler",
+    "qwen_resolution": 640,
+    "qwen_steps": 50
+  },
+  "segmentation": {
+    "enabled": false,
+    "model": "configurable"
+  },
+  "reconstruction": {
+    "enabled": false,
+    "model": "configurable"
+  },
+  "psd": {
+    "enabled": true
+  },
+  "validation": {
+    "strict": true,
+    "min_confidence": 0.55
+  }
+}
