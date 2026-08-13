@@ -29,6 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     if _run_realesrgan(source, output, args.scale):
         status["status"] = "complete"
     else:
+        _clear_cuda_cache()
         image = Image.open(run_dir / "upscale" / f"master_{args.scale}x.png").convert("RGBA")
         image.save(output)
         status["status"] = "fallback"
@@ -54,7 +55,12 @@ def _run_realesrgan(source: Path, output: Path, scale: int) -> bool:
             str(output_dir),
             "--outscale",
             str(scale),
-            "--fp32",
+            "--tile",
+            "256",
+            "--tile_pad",
+            "10",
+            "--pre_pad",
+            "0",
         ]
         try:
             subprocess.run(command, cwd="/opt/Real-ESRGAN", check=True)
@@ -79,6 +85,16 @@ def _which(name: str) -> str | None:
     from shutil import which
 
     return which(name)
+
+
+def _clear_cuda_cache() -> None:
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

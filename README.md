@@ -84,9 +84,9 @@ This creates `output/<run_id>/vast/` and `output/<run_id>.zip`. Upload the zip
 to a Vast.ai instance running the GitHub-built image, then run:
 
 ```bash
-python -m src.remote.worker --run-zip /workspace/<run_id>.zip --preflight
-python -m src.remote.worker --run-zip /workspace/<run_id>.zip --plan-only
-python -m src.remote.worker --run-zip /workspace/<run_id>.zip
+python3 -m src.remote.worker --run-zip /workspace/<run_id>.zip --preflight
+python3 -m src.remote.worker --run-zip /workspace/<run_id>.zip --plan-only
+python3 -m src.remote.worker --run-zip /workspace/<run_id>.zip
 ```
 
 `--plan-only` creates `/workspace/<run_id>_done.zip` with neural upscale and
