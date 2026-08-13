@@ -171,16 +171,24 @@ class AnalysisStage(Stage):
         face_part = next((item for item in fallback_targets if item["id"] == "head_face"), None)
         face_crop_path = output_dir / "face_crop_for_openrouter.png"
         crop_origin = [0, 0]
+        crop_box: list[int] | None = None
         if face_part:
             crop_box = _expand_bbox(face_part["bbox"], 0.35, 0.35)
             crop_box = _clamp_bbox(crop_box, image.size)
             crop_origin = [crop_box[0], crop_box[1]]
             _crop_bbox(image, crop_box).save(face_crop_path)
         plan = client.plan_live2d_targets(source, face_crop_path if face_crop_path.exists() else None)
-        parts = _merge_openrouter_regions(plan, crop_origin)
+        parts, merge_warnings = _merge_openrouter_regions(
+            plan=plan,
+            face_crop_origin=crop_origin,
+            image_size=image.size,
+            character_box=_character_bbox(image),
+            fallback_targets=fallback_targets,
+            face_crop_box=crop_box,
+        )
         plan_path = output_dir / "openrouter_plan.json"
         plan_path.write_text(json.dumps({**plan, "parts_full_canvas": parts}, indent=2, ensure_ascii=False), encoding="utf-8")
-        return {"parts": parts, "warnings": plan.get("warnings", [])}
+        return {"parts": parts, "warnings": plan.get("warnings", []) + merge_warnings}
 
 
 class DecompositionStage(Stage):
@@ -523,34 +531,57 @@ def _recommended_parameters() -> list[str]:
 
 def _material_targets_from_analysis(analysis: dict[str, Any], quality: str, source: Path | None = None) -> dict[str, Any]:
     parts = analysis.get("parts", []) if isinstance(analysis, dict) else []
-    clean_parts = []
+    fallback_parts = _default_material_targets(quality, source)
+    fallback_by_id = {item["id"]: dict(item) for item in fallback_parts}
+    merged = {item["id"]: dict(item) for item in fallback_parts}
+    image_size: tuple[int, int] | None = None
+    character_box: list[int] | None = None
+    rejected = 0
+    accepted = 0
+    if source and source.exists():
+        canvas = open_rgba(source)
+        image_size = canvas.size
+        character_box = _character_bbox(canvas)
     for part in parts:
         if not isinstance(part, dict):
             continue
-        confidence = float(part.get("confidence", 0.0) or 0.0)
+        confidence = _safe_float(part.get("confidence", 0.0), 0.0)
         if confidence < 0.35:
+            rejected += 1
             continue
-        clean_parts.append(
-            {
-                "id": _sanitize_part_id(str(part.get("id") or "part")),
-                "group": str(part.get("group") or "ROOT"),
-                "bbox": part.get("bbox") or [0, 0, 0, 0],
-                "depth": int(part.get("depth", 50) or 50),
-                "deformable": bool(part.get("deformable", True)),
-                "occluded": bool(part.get("occluded", False)),
-                "needs_reconstruction": bool(part.get("needs_reconstruction", False)),
-                "confidence": confidence,
-            }
-        )
-    if not clean_parts:
-        clean_parts = _default_material_targets(quality, source)
+        item = _normalize_region({**part, "confidence": confidence})
+        item = _canonicalize_region(item, fallback_by_id)
+        if item["id"] not in merged:
+            rejected += 1
+            continue
+        if image_size and character_box:
+            selected_bbox = _select_best_bbox_variant(
+                item,
+                image_size,
+                character_box,
+                fallback_by_id,
+            )
+            if not selected_bbox:
+                rejected += 1
+                continue
+            item["bbox"] = selected_bbox
+            if not _part_bbox_is_reasonable(item, image_size, character_box, fallback_by_id):
+                rejected += 1
+                continue
+        merged[item["id"]] = item
+        accepted += 1
+    clean_parts = _ordered_material_parts(merged, fallback_parts)
+    notes = [
+        "Targets are semantic guidance for Qwen Image Layered.",
+        "Qwen may not obey per-layer semantics exactly; validation and refinement happen after remote output.",
+        "OpenRouter boxes are geometry-checked; unsafe boxes are replaced by deterministic fallback targets.",
+    ]
+    if parts:
+        notes.append(f"OpenRouter target filter accepted {accepted} candidate(s), rejected {rejected} candidate(s).")
     return {
         "quality": quality,
         "parts": sorted(clean_parts, key=lambda item: item["depth"]),
-        "notes": [
-            "Targets are semantic guidance for Qwen Image Layered.",
-            "Qwen may not obey per-layer semantics exactly; validation and refinement happen after remote output.",
-        ],
+        "notes": notes,
     }
 
 
@@ -581,7 +612,7 @@ def _default_material_targets(quality: str, source: Path | None) -> list[dict[st
             [
                 ("brow_l", "BROWS", _relative_bbox(face, 0.08, 0.20, 0.30, 0.10), 82, False),
                 ("brow_r", "BROWS", _relative_bbox(face, 0.62, 0.20, 0.30, 0.10), 83, False),
-                ("accessories", "ACCESSORIES", _relative_bbox(character_box, 0.00, 0.00, 1.00, 0.60), 115, False),
+                ("accessories", "ACCESSORIES", _relative_bbox(character_box, 0.12, 0.02, 0.76, 0.38), 115, False),
             ]
         )
     return [
@@ -696,6 +727,8 @@ def _write_target_overlay(source: Path, material_targets: dict[str, Any], path: 
     }
     for part in material_targets.get("parts", []):
         x, y, w, h = part["bbox"]
+        if w <= 0 or h <= 0:
+            continue
         left = int(x * scale_x)
         top = int(y * scale_y)
         right = int((x + w) * scale_x)
@@ -710,11 +743,11 @@ def _write_target_overlay(source: Path, material_targets: dict[str, Any], path: 
 def _clamp_bbox(bbox: list[int], size: tuple[int, int]) -> list[int]:
     x, y, w, h = bbox
     width, height = size
-    left = max(0, x)
-    top = max(0, y)
-    right = min(width, x + w)
-    bottom = min(height, y + h)
-    return [left, top, max(1, right - left), max(1, bottom - top)]
+    left = max(0, min(width, x))
+    top = max(0, min(height, y))
+    right = max(0, min(width, x + w))
+    bottom = max(0, min(height, y + h))
+    return [left, top, max(0, right - left), max(0, bottom - top)]
 
 
 def _crop_bbox(image: Image.Image, bbox: list[int]) -> Image.Image:
@@ -722,25 +755,67 @@ def _crop_bbox(image: Image.Image, bbox: list[int]) -> Image.Image:
     return image.crop((x, y, x + w, y + h))
 
 
-def _merge_openrouter_regions(plan: dict[str, Any], face_crop_origin: list[int]) -> list[dict[str, Any]]:
+def _merge_openrouter_regions(
+    plan: dict[str, Any],
+    face_crop_origin: list[int],
+    image_size: tuple[int, int],
+    character_box: list[int],
+    fallback_targets: list[dict[str, Any]],
+    face_crop_box: list[int] | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
     full_regions = plan.get("full", {}).get("regions", []) if isinstance(plan.get("full"), dict) else []
     face_regions = plan.get("face_crop", {}).get("regions", []) if isinstance(plan.get("face_crop"), dict) else []
-    merged: dict[str, dict[str, Any]] = {}
+    fallback_by_id = {item["id"]: dict(item) for item in fallback_targets}
+    merged: dict[str, dict[str, Any]] = {item["id"]: dict(item) for item in fallback_targets}
+    warnings: list[str] = []
+    accepted = 0
+    rejected = 0
     for region in full_regions:
-        if _valid_region(region):
-            merged[_sanitize_part_id(region["id"])] = _normalize_region(region)
+        if not _valid_region(region):
+            rejected += 1
+            continue
+        item = _canonicalize_region(_normalize_region(region), fallback_by_id)
+        if item["id"] not in fallback_by_id or item["id"] in _face_detail_ids():
+            rejected += 1
+            continue
+        selected_bbox = _select_best_bbox_variant(item, image_size, character_box, fallback_by_id)
+        if not selected_bbox:
+            rejected += 1
+            continue
+        item["bbox"] = selected_bbox
+        if not _part_bbox_is_reasonable(item, image_size, character_box, fallback_by_id):
+            rejected += 1
+            continue
+        merged[item["id"]] = _stabilize_known_part(item, fallback_by_id[item["id"]])
+        accepted += 1
     for region in face_regions:
         if not _valid_region(region):
+            rejected += 1
             continue
-        item = _normalize_region(region)
-        item["bbox"] = [
-            int(item["bbox"][0] + face_crop_origin[0]),
-            int(item["bbox"][1] + face_crop_origin[1]),
-            int(item["bbox"][2]),
-            int(item["bbox"][3]),
-        ]
-        merged[item["id"]] = item
-    return list(merged.values())
+        item = _canonicalize_region(_normalize_region(region), fallback_by_id)
+        if item["id"] not in fallback_by_id or item["id"] not in _face_detail_ids():
+            rejected += 1
+            continue
+        selected_bbox = _select_best_bbox_variant(
+            item,
+            image_size,
+            character_box,
+            fallback_by_id,
+            face_crop_origin=face_crop_origin,
+            face_crop_box=face_crop_box,
+        )
+        if not selected_bbox:
+            rejected += 1
+            continue
+        item["bbox"] = selected_bbox
+        if not _part_bbox_is_reasonable(item, image_size, character_box, fallback_by_id):
+            rejected += 1
+            continue
+        merged[item["id"]] = _stabilize_known_part(item, fallback_by_id[item["id"]])
+        accepted += 1
+    if full_regions or face_regions:
+        warnings.append(f"OpenRouter region filter accepted {accepted} candidate(s), rejected {rejected} candidate(s).")
+    return _ordered_material_parts(merged, fallback_targets), warnings
 
 
 def _valid_region(region: Any) -> bool:
@@ -750,12 +825,359 @@ def _valid_region(region: Any) -> bool:
 def _normalize_region(region: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": _sanitize_part_id(str(region.get("id") or "part")),
-        "group": str(region.get("group") or "ROOT"),
-        "bbox": [int(value) for value in region.get("bbox", [0, 0, 1, 1])],
-        "depth": int(region.get("depth", 50) or 50),
+        "group": _normalize_group(str(region.get("group") or "ROOT")),
+        "bbox": [_safe_int(value, 0) for value in region.get("bbox", [0, 0, 1, 1])[:4]],
+        "depth": _safe_int(region.get("depth", 50), 50),
         "deformable": bool(region.get("deformable", True)),
         "occluded": bool(region.get("occluded", False)),
         "needs_reconstruction": bool(region.get("needs_reconstruction", False)),
-        "confidence": float(region.get("confidence", 0.5) or 0.5),
+        "confidence": _safe_float(region.get("confidence", 0.5), 0.5),
         "reasoning": str(region.get("reasoning", "")),
     }
+
+
+def _normalize_group(group: str) -> str:
+    upper = group.upper()
+    aliases = {
+        "FACE": "HEAD",
+        "EYE": "EYES",
+        "EYEBROW": "BROWS",
+        "EYEBROWS": "BROWS",
+        "BROW": "BROWS",
+        "LIPS": "MOUTH",
+        "LIP": "MOUTH",
+        "CLOTHING": "CLOTHES",
+        "CLOTH": "CLOTHES",
+        "ACCESSORY": "ACCESSORIES",
+        "ORNAMENT": "ACCESSORIES",
+    }
+    normalized = aliases.get(upper, upper)
+    if normalized in {"ROOT", "HEAD", "EYES", "BROWS", "MOUTH", "HAIR", "BODY", "CLOTHES", "ACCESSORIES", "EFFECTS"}:
+        return normalized
+    return "ROOT"
+
+
+def _safe_int(value: Any, fallback: int) -> int:
+    try:
+        return int(round(float(value)))
+    except Exception:
+        return fallback
+
+
+def _safe_float(value: Any, fallback: float) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return fallback
+
+
+def _face_detail_ids() -> set[str]:
+    return {"eye_l", "eye_r", "brow_l", "brow_r", "mouth", "head_face"}
+
+
+def _canonicalize_region(item: dict[str, Any], fallback_by_id: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    canonical = dict(item)
+    part_id = _sanitize_part_id(str(canonical.get("id") or "part"))
+    group = _normalize_group(str(canonical.get("group") or _guess_group(part_id)))
+    text = f"{part_id} {canonical.get('reasoning', '')}".lower()
+    direct_aliases = {
+        "face": "head_face",
+        "head": "head_face",
+        "head_face": "head_face",
+        "left_eye": "eye_l",
+        "eye_left": "eye_l",
+        "l_eye": "eye_l",
+        "right_eye": "eye_r",
+        "eye_right": "eye_r",
+        "r_eye": "eye_r",
+        "left_brow": "brow_l",
+        "left_eyebrow": "brow_l",
+        "brow_left": "brow_l",
+        "right_brow": "brow_r",
+        "right_eyebrow": "brow_r",
+        "brow_right": "brow_r",
+        "lips": "mouth",
+        "lip": "mouth",
+        "mouth": "mouth",
+        "torso": "body",
+        "upper_body": "body",
+        "dress": "clothes",
+        "costume": "clothes",
+        "outfit": "clothes",
+        "clothing": "clothes",
+        "cloth": "clothes",
+        "accessory": "accessories",
+        "ornaments": "accessories",
+        "ornament": "accessories",
+    }
+    if part_id in direct_aliases:
+        part_id = direct_aliases[part_id]
+    elif part_id not in fallback_by_id:
+        if group == "EYES":
+            part_id = "eye_r" if _mentions_right(text) else "eye_l"
+        elif group == "BROWS":
+            part_id = "brow_r" if _mentions_right(text) else "brow_l"
+        elif group == "MOUTH":
+            part_id = "mouth"
+        elif group == "HEAD":
+            part_id = "head_face"
+        elif group == "BODY":
+            part_id = "body"
+        elif group == "CLOTHES":
+            part_id = "clothes"
+        elif group == "ACCESSORIES":
+            part_id = "accessories"
+        elif group == "HAIR":
+            if "back" in text or "rear" in text or "behind" in text:
+                part_id = "hair_back"
+            else:
+                part_id = "hair_front"
+    if part_id in fallback_by_id:
+        group = str(fallback_by_id[part_id]["group"])
+    canonical["id"] = part_id
+    canonical["group"] = group
+    return canonical
+
+
+def _mentions_right(text: str) -> bool:
+    tokens = {token for token in text.replace("-", "_").split("_") if token}
+    return "right" in tokens or "r" in tokens or "right" in text
+
+
+def _select_best_bbox_variant(
+    item: dict[str, Any],
+    image_size: tuple[int, int],
+    character_box: list[int],
+    fallback_by_id: dict[str, dict[str, Any]],
+    face_crop_origin: list[int] | None = None,
+    face_crop_box: list[int] | None = None,
+) -> list[int] | None:
+    best_bbox: list[int] | None = None
+    best_score = -1.0
+    for candidate in _bbox_candidates(item["bbox"], image_size, face_crop_origin, face_crop_box):
+        clamped = _clamp_bbox(candidate, image_size)
+        if clamped[2] <= 0 or clamped[3] <= 0:
+            continue
+        test_item = {**item, "bbox": clamped}
+        if not _part_bbox_is_reasonable(test_item, image_size, character_box, fallback_by_id):
+            continue
+        score = _bbox_candidate_score(test_item, character_box, fallback_by_id)
+        if score > best_score:
+            best_score = score
+            best_bbox = clamped
+    return best_bbox
+
+
+def _bbox_candidates(
+    bbox: list[int],
+    image_size: tuple[int, int],
+    face_crop_origin: list[int] | None = None,
+    face_crop_box: list[int] | None = None,
+) -> list[list[int]]:
+    raw = [_safe_int(value, 0) for value in bbox[:4]]
+    variants: list[list[int]] = []
+
+    def add(candidate: list[int]) -> None:
+        if candidate[2] <= 0 or candidate[3] <= 0:
+            return
+        if candidate not in variants:
+            variants.append(candidate)
+
+    add(raw)
+    x, y, a, b = raw
+    if a > x and b > y:
+        add([x, y, a - x, b - y])
+
+    seed_variants = list(variants)
+    for seed in seed_variants:
+        add(_scale_bbox(seed, 2.0))
+        add(_scale_bbox(seed, 0.5))
+        if _looks_like_unit_box(seed):
+            width, height = image_size
+            add([int(seed[0] * width), int(seed[1] * height), int(seed[2] * width), int(seed[3] * height)])
+        if _looks_like_1000_grid(seed):
+            width, height = image_size
+            add(_scale_bbox_xy(seed, width / 1000.0, height / 1000.0))
+
+    if face_crop_origin and face_crop_box:
+        crop_width, crop_height = face_crop_box[2], face_crop_box[3]
+        for seed in seed_variants:
+            add([seed[0] + face_crop_origin[0], seed[1] + face_crop_origin[1], seed[2], seed[3]])
+            add([seed[0] * 2 + face_crop_origin[0], seed[1] * 2 + face_crop_origin[1], seed[2] * 2, seed[3] * 2])
+            if _looks_like_1000_grid(seed):
+                scaled = _scale_bbox_xy(seed, crop_width / 1000.0, crop_height / 1000.0)
+                add([scaled[0] + face_crop_origin[0], scaled[1] + face_crop_origin[1], scaled[2], scaled[3]])
+            if _looks_like_unit_box(seed):
+                add(
+                    [
+                        int(seed[0] * crop_width + face_crop_origin[0]),
+                        int(seed[1] * crop_height + face_crop_origin[1]),
+                        int(seed[2] * crop_width),
+                        int(seed[3] * crop_height),
+                    ]
+                )
+    return variants
+
+
+def _scale_bbox(bbox: list[int], scale: float) -> list[int]:
+    return [int(round(value * scale)) for value in bbox]
+
+
+def _scale_bbox_xy(bbox: list[int], scale_x: float, scale_y: float) -> list[int]:
+    return [
+        int(round(bbox[0] * scale_x)),
+        int(round(bbox[1] * scale_y)),
+        int(round(bbox[2] * scale_x)),
+        int(round(bbox[3] * scale_y)),
+    ]
+
+
+def _looks_like_1000_grid(bbox: list[int]) -> bool:
+    return max(abs(value) for value in bbox) <= 1000 and min(bbox[2], bbox[3]) > 1
+
+
+def _looks_like_unit_box(bbox: list[int]) -> bool:
+    return all(0 <= value <= 1 for value in bbox)
+
+
+def _part_bbox_is_reasonable(
+    item: dict[str, Any],
+    image_size: tuple[int, int],
+    character_box: list[int],
+    fallback_by_id: dict[str, dict[str, Any]],
+) -> bool:
+    bbox = item["bbox"]
+    part_id = str(item.get("id") or "")
+    group = _normalize_group(str(item.get("group") or "ROOT"))
+    width, height = image_size
+    if bbox[2] < 4 or bbox[3] < 4:
+        return False
+    if bbox[0] < 0 or bbox[1] < 0 or bbox[0] + bbox[2] > width or bbox[1] + bbox[3] > height:
+        return False
+    bbox_area = _bbox_area(bbox)
+    canvas_area = max(1, width * height)
+    if bbox_area / canvas_area > 0.72:
+        return False
+    inside_character = _inside_fraction(bbox, character_box)
+    if inside_character < (0.08 if group in {"HAIR", "ACCESSORIES"} else 0.18):
+        return False
+
+    fallback = fallback_by_id.get(part_id)
+    if not fallback:
+        return False
+
+    fallback_bbox = fallback["bbox"]
+    fallback_area = max(1, _bbox_area(fallback_bbox))
+    area_ratio = bbox_area / fallback_area
+    if part_id in {"eye_l", "eye_r", "brow_l", "brow_r", "mouth"}:
+        face = fallback_by_id.get("head_face", {}).get("bbox", fallback_bbox)
+        face_guard = _clamp_bbox(_expand_bbox(face, 0.65, 0.65), image_size)
+        if _inside_fraction(bbox, face_guard) < 0.65:
+            return False
+        if part_id.startswith("eye") and not (0.10 <= area_ratio <= 7.50):
+            return False
+        if part_id.startswith("brow") and not (0.05 <= area_ratio <= 8.00):
+            return False
+        if part_id == "mouth" and not (0.04 <= area_ratio <= 10.00):
+            return False
+        cx, cy = _bbox_center(bbox)
+        face_x, face_y, face_w, face_h = face
+        face_center_x = face_x + face_w / 2
+        if part_id.endswith("_l") and cx > face_center_x + face_w * 0.12:
+            return False
+        if part_id.endswith("_r") and cx < face_center_x - face_w * 0.12:
+            return False
+        if part_id == "mouth" and not (face_y + face_h * 0.40 <= cy <= face_y + face_h * 0.88):
+            return False
+        return True
+
+    limits = {
+        "hair_back": (0.12, 4.50),
+        "hair_front": (0.08, 3.50),
+        "head_face": (0.16, 4.00),
+        "body": (0.16, 4.25),
+        "clothes": (0.16, 4.25),
+        "accessories": (0.03, 5.00),
+    }.get(part_id, (0.10, 4.00))
+    if not (limits[0] <= area_ratio <= limits[1]):
+        return False
+    guard_pad = 0.75 if part_id in {"hair_back", "accessories"} else 0.45
+    guard = _clamp_bbox(_expand_bbox(fallback_bbox, guard_pad, guard_pad), image_size)
+    center = _bbox_center(bbox)
+    if part_id not in {"hair_back", "accessories"} and not _point_in_bbox(center, guard):
+        return False
+    min_inside = 0.30 if part_id in {"hair_back", "accessories"} else 0.50
+    if _inside_fraction(bbox, guard) < min_inside and _inside_fraction(fallback_bbox, bbox) < 0.15:
+        return False
+    return True
+
+
+def _bbox_candidate_score(
+    item: dict[str, Any],
+    character_box: list[int],
+    fallback_by_id: dict[str, dict[str, Any]],
+) -> float:
+    bbox = item["bbox"]
+    fallback = fallback_by_id.get(item["id"], {})
+    fallback_bbox = fallback.get("bbox", character_box)
+    area_ratio = _bbox_area(bbox) / max(1, _bbox_area(fallback_bbox))
+    ratio_score = max(0.0, 1.0 - abs(1.0 - min(area_ratio, 1 / max(area_ratio, 0.0001))))
+    return (
+        _iou(bbox, fallback_bbox) * 3.0
+        + _inside_fraction(bbox, _expand_bbox(fallback_bbox, 0.80, 0.80)) * 2.0
+        + _inside_fraction(bbox, character_box)
+        + ratio_score
+        + _safe_float(item.get("confidence"), 0.5)
+    )
+
+
+def _ordered_material_parts(merged: dict[str, dict[str, Any]], fallback_targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ordered = []
+    for fallback in fallback_targets:
+        item = dict(merged.get(fallback["id"], fallback))
+        item = _stabilize_known_part(item, fallback)
+        ordered.append(item)
+    return ordered
+
+
+def _stabilize_known_part(item: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    stable = dict(item)
+    stable["id"] = fallback["id"]
+    stable["group"] = fallback["group"]
+    stable["depth"] = fallback["depth"]
+    stable["deformable"] = fallback["deformable"]
+    stable["occluded"] = fallback["occluded"]
+    stable["needs_reconstruction"] = bool(stable.get("needs_reconstruction", fallback.get("needs_reconstruction", False)))
+    stable["confidence"] = max(_safe_float(stable.get("confidence"), 0.5), _safe_float(fallback.get("confidence"), 0.5))
+    return stable
+
+
+def _bbox_area(bbox: list[int]) -> int:
+    return max(0, bbox[2]) * max(0, bbox[3])
+
+
+def _intersection_area(a: list[int], b: list[int]) -> int:
+    left = max(a[0], b[0])
+    top = max(a[1], b[1])
+    right = min(a[0] + a[2], b[0] + b[2])
+    bottom = min(a[1] + a[3], b[1] + b[3])
+    return max(0, right - left) * max(0, bottom - top)
+
+
+def _inside_fraction(child: list[int], parent: list[int]) -> float:
+    return _intersection_area(child, parent) / max(1, _bbox_area(child))
+
+
+def _iou(a: list[int], b: list[int]) -> float:
+    intersection = _intersection_area(a, b)
+    union = _bbox_area(a) + _bbox_area(b) - intersection
+    return intersection / max(1, union)
+
+
+def _bbox_center(bbox: list[int]) -> tuple[float, float]:
+    return bbox[0] + bbox[2] / 2, bbox[1] + bbox[3] / 2
+
+
+def _point_in_bbox(point: tuple[float, float], bbox: list[int]) -> bool:
+    x, y = point
+    return bbox[0] <= x <= bbox[0] + bbox[2] and bbox[1] <= y <= bbox[1] + bbox[3]

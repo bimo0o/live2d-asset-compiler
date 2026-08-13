@@ -9,6 +9,8 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from PIL import Image
+
 
 class OpenRouterClient:
     """Cloud reasoning adapter.
@@ -24,29 +26,41 @@ class OpenRouterClient:
         self.image_model = image_model
 
     def analyze_character(self, image: Path) -> dict[str, Any]:
+        width, height = _image_size(image)
         prompt = (
             "You are analyzing a 2D anime character illustration specifically for Live2D "
             "material separation. Return strict JSON only. Identify visually present "
             "components that should potentially become independent deformable materials. "
-            "Do not invent missing objects. For each component include id, group, bbox "
-            "[x,y,w,h], depth, deformable, occluded, needs_reconstruction, confidence, "
+            f"The image is exactly {width}x{height} pixels. Use ONLY this full-image pixel "
+            "coordinate system with origin at the top-left corner. Every bbox must be inside "
+            f"0<=x<{width}, 0<=y<{height}. Do not invent missing objects. "
+            "For each component include id, group, bbox [x,y,w,h], depth, deformable, "
+            "occluded, needs_reconstruction, confidence, "
             "and short reasoning. Also include character type, pose, full_body, and background."
         )
         return self._vision_json(image, prompt, _character_analysis_schema(), "live2d_character_analysis")
 
     def plan_live2d_targets(self, full_image: Path, face_crop: Path | None = None) -> dict[str, Any]:
+        full_width, full_height = _image_size(full_image)
         full_prompt = (
             "You are a senior Live2D material separation artist. Analyze the full anime character image. "
+            f"The image is exactly {full_width}x{full_height} pixels. "
             "Return strict JSON. Identify the character silhouette, head, face, hair groups, clothes, arms, hands, "
-            "legs, and accessories. Use pixel coordinates in the provided full image. Be conservative: if unsure, "
-            "mark confidence low rather than guessing."
+            "legs, and accessories. Use pixel coordinates in this exact full image. Do not use a 0-1000 normalized "
+            "grid and do not use coordinates from a resized preview. For the full-image pass, prefer these canonical "
+            "ids only: hair_back, hair_front, body, clothes, accessories, head_face. Do NOT output eye, eyebrow, or "
+            "mouth boxes in the full-image pass; those are handled by a face crop. Be conservative: if unsure, mark "
+            "confidence low rather than guessing."
         )
         full_plan = self._vision_json(full_image, full_prompt, _region_plan_schema(), "full_body_live2d_plan")
         face_plan: dict[str, Any] = {"regions": [], "warnings": []}
         if face_crop and face_crop.exists():
+            crop_width, crop_height = _image_size(face_crop)
             face_prompt = (
                 "Analyze this FACE CROP for Live2D material separation. Return strict JSON. Locate exact visible "
-                "left eye, right eye, eyebrows, mouth, nose, and face contour in CROP pixel coordinates. "
+                f"left eye, right eye, eyebrows, mouth, nose, and face contour. The crop is exactly "
+                f"{crop_width}x{crop_height} pixels. Use CROP pixel coordinates only, with crop top-left as (0,0). "
+                "Use these canonical ids only: eye_l, eye_r, brow_l, brow_r, mouth, head_face. "
                 "The mouth box must tightly cover the visible mouth only, not collar, chin shadow, or clothing. "
                 "Eye boxes must tightly cover visible eyeball/iris/lashes only, not hair."
             )
@@ -140,6 +154,11 @@ def _image_data_url(path: Path) -> str:
     }.get(path.suffix.lower(), "image/png")
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:{mime};base64,{encoded}"
+
+
+def _image_size(path: Path) -> tuple[int, int]:
+    with Image.open(path) as image:
+        return image.size
 
 
 def _character_analysis_schema() -> dict[str, Any]:
