@@ -115,10 +115,19 @@ class OpenRouterClient:
             detail = error.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"OpenRouter request failed: HTTP {error.code}: {detail}") from error
 
-        content = body["choices"][0]["message"]["content"]
+        try:
+            content = body["choices"][0]["message"]["content"]
+        except Exception as exc:
+            raise RuntimeError(f"OpenRouter response did not contain message content: {body}") from exc
         if isinstance(content, list):
             content = "".join(item.get("text", "") for item in content if isinstance(item, dict))
-        return json.loads(content)
+        if not isinstance(content, str) or not content.strip():
+            raise RuntimeError(f"OpenRouter returned empty content: {body}")
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError as exc:
+            preview = content[:1000]
+            raise RuntimeError(f"OpenRouter returned non-JSON content for {schema_name}: {preview}") from exc
 
 
 def _image_data_url(path: Path) -> str:

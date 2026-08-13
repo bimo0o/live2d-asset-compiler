@@ -32,7 +32,14 @@ RUN git clone --depth 1 https://github.com/xinntao/Real-ESRGAN.git /opt/Real-ESR
     && python3 -m pip install -r requirements.txt \
     && python3 setup.py develop \
     && mkdir -p weights \
-    && wget -O weights/RealESRGAN_x4plus_anime_6B.pth https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth
+    && wget -O weights/RealESRGAN_x4plus_anime_6B.pth https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth \
+    && python3 - <<'PY'
+from pathlib import Path
+import torchvision.transforms
+site = Path(torchvision.transforms.__file__).parent
+(site / "functional_tensor.py").write_text("from torchvision.transforms.functional import *\n", encoding="utf-8")
+print("patched torchvision functional_tensor shim")
+PY
 
 COPY . .
 
