@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
@@ -124,7 +125,7 @@ class OpenRouterClient:
         if not isinstance(content, str) or not content.strip():
             raise RuntimeError(f"OpenRouter returned empty content: {body}")
         try:
-            return json.loads(content)
+            return _normalize_response(json.loads(_extract_json_text(content)), schema_name)
         except json.JSONDecodeError as exc:
             preview = content[:1000]
             raise RuntimeError(f"OpenRouter returned non-JSON content for {schema_name}: {preview}") from exc
@@ -174,6 +175,26 @@ def _character_analysis_schema() -> dict[str, Any]:
             "confidence",
             "reasoning",
         ],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "character": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string"},
+                    "pose": {"type": "string"},
+                    "full_body": {"type": "boolean"},
+                    "background": {"type": "string"},
+                },
+                "required": ["type", "pose", "full_body", "background"],
+                "additionalProperties": False,
+            },
+            "parts": {"type": "array", "items": part},
+            "warnings": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["character", "parts", "warnings"],
         "additionalProperties": False,
     }
 
@@ -246,23 +267,62 @@ def _overlay_validation_schema() -> dict[str, Any]:
         "required": ["overall_status", "checks", "warnings"],
         "additionalProperties": False,
     }
+
+
+def _extract_json_text(content: str) -> str:
+    text = content.strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        return fenced.group(1).strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return text[start : end + 1]
+    return text
+
+
+def _normalize_response(data: dict[str, Any], schema_name: str) -> dict[str, Any]:
+    if schema_name == "live2d_character_analysis":
+        character = data.get("character") or {
+            "type": data.get("character_type", "anime_character"),
+            "pose": data.get("pose", "unknown"),
+            "full_body": bool(data.get("full_body", False)),
+            "background": data.get("background", "unknown"),
+        }
+        parts = data.get("parts") or data.get("components") or data.get("regions") or []
+        return {"character": character, "parts": [_normalize_part(part) for part in parts], "warnings": data.get("warnings", [])}
+    if schema_name in {"full_body_live2d_plan", "face_detail_live2d_plan"}:
+        regions = data.get("regions") or data.get("parts") or data.get("components") or []
+        return {
+            "coordinate_space": data.get("coordinate_space", "image_pixels"),
+            "regions": [_normalize_part(part) for part in regions],
+            "warnings": data.get("warnings", []),
+        }
+    return data
+
+
+def _normalize_part(part: dict[str, Any]) -> dict[str, Any]:
+    group = str(part.get("group") or "ROOT").upper()
+    group_aliases = {
+        "HAIR_B": "HAIR",
+        "HAIR": "HAIR",
+        "FACE": "HEAD",
+        "EYE": "EYES",
+        "EYES": "EYES",
+        "MOUTH": "MOUTH",
+        "CLOTHING": "CLOTHES",
+        "CLOTHES": "CLOTHES",
+        "ACCESSORY": "ACCESSORIES",
+    }
+    bbox = part.get("bbox") or part.get("box") or [0, 0, 1, 1]
     return {
-        "type": "object",
-        "properties": {
-            "character": {
-                "type": "object",
-                "properties": {
-                    "type": {"type": "string"},
-                    "pose": {"type": "string"},
-                    "full_body": {"type": "boolean"},
-                    "background": {"type": "string"},
-                },
-                "required": ["type", "pose", "full_body", "background"],
-                "additionalProperties": False,
-            },
-            "parts": {"type": "array", "items": part},
-            "warnings": {"type": "array", "items": {"type": "string"}},
-        },
-        "required": ["character", "parts", "warnings"],
-        "additionalProperties": False,
+        "id": str(part.get("id") or part.get("name") or "part"),
+        "group": group_aliases.get(group, group if group in {"ROOT", "HEAD", "EYES", "BROWS", "MOUTH", "HAIR", "BODY", "CLOTHES", "ACCESSORIES", "EFFECTS"} else "ROOT"),
+        "bbox": [int(value) for value in bbox[:4]],
+        "depth": int(part.get("depth", 50) or 50),
+        "deformable": bool(part.get("deformable", True)),
+        "occluded": bool(part.get("occluded", False)),
+        "needs_reconstruction": bool(part.get("needs_reconstruction", False)),
+        "confidence": float(part.get("confidence", 0.5) or 0.5),
+        "reasoning": str(part.get("reasoning") or part.get("short_reasoning") or ""),
     }
